@@ -36,8 +36,6 @@ class QuizState:
     current_question: int = 0
     question_started_at: float = 0.0
     listeners: list = field(default_factory=list)
-    participants: set = field(default_factory=set)
-    revealing: bool = False  # True = showing answer, waiting for next advance
 
 
 state = QuizState()
@@ -48,18 +46,11 @@ state_lock = asyncio.Lock()
 # ---------------------------------------------------------------------------
 
 
-def format_state_event(q_num: int, revealing: bool = False) -> str:
+def format_state_event(q_num: int) -> str:
     if q_num == 0:
         payload = {"question": 0, "status": "waiting"}
     elif q_num == -1:
         payload = {"question": -1, "status": "closed"}
-    elif revealing:
-        q = questions.get(q_num, {})
-        payload = {
-            "question": q_num,
-            "status": "reveal",
-            "answer": q.get("answer", ""),
-        }
     else:
         q = questions.get(q_num, {})
         payload = {
@@ -128,11 +119,6 @@ PARTICIPANT_HTML = """<!DOCTYPE html>
   <button id="submit-btn" onclick="submitAnswer()">Submit</button>
 </div>
 
-<div id="reveal-section" class="hidden">
-  <p style="font-size:1.1rem; color:#555;">Answer revealed:</p>
-  <p id="reveal-answer" style="font-size:1.4rem; font-weight:bold;"></p>
-</div>
-
 <div id="thankyou" class="hidden">Thank you!</div>
 
 <script>
@@ -169,11 +155,6 @@ function saveName() {
   if (!name) return;
   setCookie('name', name);
   setCookie('access_time', new Date().toISOString());
-  fetch('/register', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name})
-  });
   hide('name-section');
   show('waiting-section');
 }
@@ -188,25 +169,16 @@ function connectSSE() {
 function handleState(data) {
   if (data.status === 'waiting') {
     hide('question-section');
-    hide('reveal-section');
     hide('thankyou');
     show('waiting-section');
   } else if (data.status === 'active') {
     currentQuestion = data.question;
     renderQuestion(data);
     hide('waiting-section');
-    hide('reveal-section');
     hide('thankyou');
     show('question-section');
-  } else if (data.status === 'reveal') {
-    document.getElementById('reveal-answer').textContent = data.answer;
-    hide('question-section');
-    hide('waiting-section');
-    hide('thankyou');
-    show('reveal-section');
   } else if (data.status === 'closed') {
     hide('question-section');
-    hide('reveal-section');
     hide('waiting-section');
     show('thankyou');
     sendFinalSubmit();
@@ -286,9 +258,6 @@ ADMIN_HTML = """<!DOCTYPE html>
   button { padding: 12px 28px; font-size: 1rem; margin: 8px 8px 8px 0; cursor: pointer; }
   #status { margin-top: 20px; padding: 12px; background: #f4f4f4; border-radius: 4px;
             font-family: monospace; white-space: pre-wrap; }
-  #participants { margin-top: 16px; padding: 12px; background: #eef6ff; border-radius: 4px; }
-  #participants h2 { margin: 0 0 8px; font-size: 1rem; }
-  #participant-list { margin: 0; padding-left: 20px; }
 </style>
 </head>
 <body>
@@ -297,10 +266,6 @@ ADMIN_HTML = """<!DOCTYPE html>
 <button onclick="adminAction('/admin/next')">Next</button>
 <button onclick="adminAction('/admin/close')">Close</button>
 <a href="/admin/results" download><button type="button">Download Results</button></a>
-<div id="participants">
-  <h2>Participants ready: <span id="count">0</span></h2>
-  <ol id="participant-list"></ol>
-</div>
 <div id="status">—</div>
 <script>
 async function adminAction(path) {
@@ -308,22 +273,6 @@ async function adminAction(path) {
   const data = await resp.json();
   document.getElementById('status').textContent = JSON.stringify(data, null, 2);
 }
-
-async function refreshParticipants() {
-  const resp = await fetch('/admin/status');
-  const data = await resp.json();
-  document.getElementById('count').textContent = data.count;
-  const list = document.getElementById('participant-list');
-  list.innerHTML = '';
-  data.names.forEach(name => {
-    const li = document.createElement('li');
-    li.textContent = name;
-    list.appendChild(li);
-  });
-}
-
-refreshParticipants();
-setInterval(refreshParticipants, 3000);
 </script>
 </body>
 </html>
@@ -332,23 +281,6 @@ setInterval(refreshParticipants, 3000);
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
-
-
-@app.post("/register")
-async def register(request: Request) -> JSONResponse:
-    body = await request.json()
-    name = str(body.get("name", "")).strip()
-    if name:
-        async with state_lock:
-            state.participants.add(name)
-    return JSONResponse({"ok": True})
-
-
-@app.get("/admin/status")
-async def admin_status() -> JSONResponse:
-    async with state_lock:
-        names = sorted(state.participants)
-    return JSONResponse({"count": len(names), "names": names})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -368,7 +300,7 @@ async def sse_events() -> StreamingResponse:
     async def generator():
         async with state_lock:
             state.listeners.append(queue)
-            current = format_state_event(state.current_question, state.revealing)
+            current = format_state_event(state.current_question)
         try:
             yield current
             while True:
@@ -420,7 +352,6 @@ async def admin_start() -> JSONResponse:
     async with state_lock:
         state.current_question = 1
         state.question_started_at = time.monotonic()
-        state.revealing = False
         event = format_state_event(1)
     await broadcast(event)
     return JSONResponse({"ok": True, "question": 1})
@@ -430,24 +361,14 @@ async def admin_start() -> JSONResponse:
 async def admin_next() -> JSONResponse:
     max_q = max(questions.keys()) if questions else 0
     async with state_lock:
-        if state.current_question == 0:
-            return JSONResponse({"ok": False, "error": "quiz not started"})
-        if state.revealing:
-            # Second click: advance to next question
-            if state.current_question >= max_q:
-                return JSONResponse({"ok": False, "error": "already at last question"})
-            state.current_question += 1
-            state.question_started_at = time.monotonic()
-            state.revealing = False
-            event = format_state_event(state.current_question, False)
-            info = {"ok": True, "phase": "question", "question": state.current_question}
-        else:
-            # First click: reveal answer for current question
-            state.revealing = True
-            event = format_state_event(state.current_question, True)
-            info = {"ok": True, "phase": "reveal", "question": state.current_question}
+        if state.current_question >= max_q:
+            return JSONResponse({"ok": False, "error": "already at last question"})
+        state.current_question += 1
+        state.question_started_at = time.monotonic()
+        q = state.current_question
+        event = format_state_event(q)
     await broadcast(event)
-    return JSONResponse(info)
+    return JSONResponse({"ok": True, "question": q})
 
 
 @app.get("/admin/results")
@@ -468,7 +389,6 @@ async def admin_results() -> StreamingResponse:
 async def admin_close() -> JSONResponse:
     async with state_lock:
         state.current_question = -1
-        state.revealing = False
         event = format_state_event(-1)
     await broadcast(event)
     return JSONResponse({"ok": True, "question": -1})
