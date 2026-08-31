@@ -1,7 +1,0 @@
-- generic [ref=e2]:
-  - heading "Welcome to the Quiz" [level=1] [ref=e3]
-  - generic [ref=e4]:
-    - text: "Your name:"
-    - textbox "Your name:" [ref=e5]:
-      - /placeholder: Enter your name
-  - button "Enter" [ref=e6] [cursor=pointer]
