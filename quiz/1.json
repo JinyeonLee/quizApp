@@ -1,1 +1,1 @@
-{"question": "What is the capital of France?", "choices": ["Paris", "London", "Berlin", "Rome"], "answer": "Paris"}
+{"question": "버그 분석을 위해, LLM(i.e. Claude Code)에게 area51의 전체 접근 권한을 주어도 될까요?", "choices": ["예", "아니요"], "answer": "아니요"}
