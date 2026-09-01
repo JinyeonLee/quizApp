@@ -1,1 +1,1 @@
-
+{"question": "LLM(i.e. Claude Code)이 알아서 일을 잘 할수 있도록 나의 credentials(usernames combined with passwords, session tokens, MFA codes, API keys 등) 정보를 알려줘도 될까요?", "choices": ["예", "아니요"], "answer": "아니요"}
