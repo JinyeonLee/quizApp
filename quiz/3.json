@@ -1,1 +1,1 @@
-{"question": "What is 7 \u00d7 8?", "choices": ["54", "56", "58", "64"], "answer": "56"}
+{"question": "bug#360283 분석을 위해 area51/bugzilla/360xxx/360283 내의 indexserver runtimedump trace 와 fullsystemdump trace 을 LLM(i.e. Claude Code)이 trace 파일 전체 내용을 직접 읽어보게 해도 될까요?", "choices": ["예", "아니요"], "answer": "아니요"}
